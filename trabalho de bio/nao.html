@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Viagem pelo Sistema Excretor</title>
+  <style>
+    body {
+      text-align: center;
+      font-family: Arial, sans-serif;
+      background-color: #220000;
+      color: #eee;
+    }
+    canvas {
+      display: block;
+      margin: 20px auto;
+      border: 5px solid #aa0000;
+      background-color: #440000;
+      border-radius: 10px;
+    }
+    #score {
+      font-size: 24px;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    #phase {
+      font-size: 20px;
+      margin-top: 5px;
+      color: #ffbbbb;
+    }
+    #lives {
+      font-size: 20px;
+      margin-top: 5px;
+      color: #ff5555;
+    }
+    #restartBtn {
+      padding: 12px 25px;
+      font-size: 18px;
+      background-color: #aa0000;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      margin-top: 15px;
+      cursor: pointer;
+      display: none;
+    }
+    #instructions {
+      margin-top: 10px;
+      font-size: 16px;
+      color: #ccc;
+    }
+  </style>
+</head>
+<body>
+  <h1>Viagem pelo Sistema Excretor</h1>
+  <canvas id="game" width="400" height="500"></canvas>
+  <div id="score">Pontuação: 0</div>
+  <div id="phase">Fase: Sangue</div>
+  <div id="lives">Vidas: 3</div>
+  <button id="restartBtn">Reiniciar</button>
+  <div id="instructions">
+    Use A e D para mover. Pressione W para atirar 💧.
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const scoreDisplay = document.getElementById("score");
+    const phaseDisplay = document.getElementById("phase");
+    const livesDisplay = document.getElementById("lives");
+    const restartBtn = document.getElementById("restartBtn");
+
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+
+    const player = {
+      x: WIDTH / 2 - 20,
+      y: HEIGHT - 60,
+      width: 40,
+      height: 40,
+      speed: 6,
+      color: "#00ffff",
+      immune: false,
+      immuneTimer: 0,
+      shootCooldown: 0,
+      lives: 3,
+    };
+
+    let moveLeft = false;
+    let moveRight = false;
+    let shooting = false;
+
+    let obstacles = [];
+    let powerUps = [];
+    let boss = null;
+    let playerShots = [];
+
+    let score = 0;
+    let frameCount = 0;
+    let gameOver = false;
+    let gameSpeed = 1;
+    let currentPhase = "Sangue";
+
+    const PHASES = [
+      { name: "Sangue", bgColor: "#440000", obstacleEmoji: "🩸", powerEmoji: "🛡️", bossName: "Rim", bossEmoji: "🫁" },
+      { name: "Rim", bgColor: "#330033", obstacleEmoji: "🪨", powerEmoji: "💧", bossName: "Ureter", bossEmoji: "🐍" },
+      { name: "Ureter", bgColor: "#553300", obstacleEmoji: "💧", powerEmoji: "⚡", bossName: "Bexiga", bossEmoji: "🎈" },
+      { name: "Bexiga", bgColor: "#554433", obstacleEmoji: "⚡", powerEmoji: "❤️", bossName: "Uretra", bossEmoji: "🚰" },
+      { name: "Uretra", bgColor: "#334455", obstacleEmoji: "🔥", powerEmoji: "⭐", bossName: null, bossEmoji: null },
+    ];
+
+    const BOSS_SCORES = [500, 1000, 1500, 2000];
+
+    restartBtn.addEventListener("click", () => {
+      resetGame();
+    });
+
+    function resetGame() {
+      obstacles = [];
+      powerUps = [];
+      boss = null;
+      playerShots = [];
+      score = 0;
+      frameCount = 0;
+      gameOver = false;
+      gameSpeed = 1;
+      currentPhase = "Sangue";
+      player.x = WIDTH / 2 - player.width / 2;
+      player.lives = 3;
+      player.immune = false;
+      player.immuneTimer = 0;
+      player.shootCooldown = 0;
+      restartBtn.style.display = "none";
+      phaseDisplay.textContent = "Fase: " + currentPhase;
+      scoreDisplay.textContent = "Pontuação: 0";
+      livesDisplay.textContent = "Vidas: " + player.lives;
+      document.body.style.backgroundColor = PHASES[0].bgColor;
+      canvas.style.backgroundColor = PHASES[0].bgColor;
+      canvas.style.borderColor = "#aa0000";
+      update();
+    }
+
+    function createObstacle() {
+      if (gameOver || boss) return;
+
+      const phaseData = PHASES.find(p => p.name === currentPhase);
+
+      let size = Math.random() * 20 + 20;
+      obstacles.push({
+        x: Math.random() * (WIDTH - size),
+        y: -size,
+        width: size,
+        height: size,
+        speed: 2 + Math.random() * 2 * gameSpeed,
+        emoji: phaseData.obstacleEmoji,
+      });
+    }
+
+    function createPowerUp() {
+      if (gameOver || boss) return;
+
+      const phaseData = PHASES.find(p => p.name === currentPhase);
+
+      let size = 30;
+      powerUps.push({
+        x: Math.random() * (WIDTH - size),
+        y: -size,
+        width: size,
+        height: size,
+        speed: 2 + gameSpeed,
+        emoji: phaseData.powerEmoji,
+      });
+    }
+
+    function drawEmoji(emoji, x, y, size) {
+      ctx.font = `${size}px serif`;
+      ctx.fillText(emoji, x, y + size);
+    }
+
+    function drawPlayer() {
+      if (player.immune && frameCount % 20 < 10) return; // pisca
+      ctx.fillStyle = player.color;
+      ctx.fillRect(player.x, player.y, player.width, player.height);
+      drawEmoji("💧", player.x, player.y - 5, 40);
+    }
+
+    function drawObstacle(ob) {
+      drawEmoji(ob.emoji, ob.x, ob.y, ob.width);
+    }
+
+    function drawPowerUp(pu) {
+      drawEmoji(pu.emoji, pu.x, pu.y, pu.width);
+    }
+
+    function updatePhase() {
+      if (score >= 2000) {
+        currentPhase = "Uretra";
+      } else if (score >= 1500) {
+        currentPhase = "Bexiga";
+      } else if (score >= 1000) {
+        currentPhase = "Ureter";
+      } else if (score >= 500) {
+        currentPhase = "Rim";
+      } else {
+        currentPhase = "Sangue";
+      }
+      phaseDisplay.textContent = "Fase: " + currentPhase;
+      document.body.style.backgroundColor = PHASES.find(p => p.name === currentPhase).bgColor;
+      canvas.style.backgroundColor = PHASES.find(p => p.name === currentPhase).bgColor;
+      canvas.style.borderColor = currentPhase === "Uretra" ? "#446677" : "#aa0000";
+    }
+
+   // ...existing code...
+function startBoss(scoreKey) {
+  if (boss) return;
+
+  const bossIndex = BOSS_SCORES.indexOf(scoreKey);
+  if (bossIndex === -1) return;
+
+  const phaseData = PHASES[bossIndex];
+
+  // Agora sorteia entre 5 tipos de movimento (0 a 4)
+  const moveType = Math.floor(Math.random() * 5);
+
+  boss = {
+    name: phaseData.bossName || phaseData.name,
+    emoji: phaseData.bossEmoji || "👾",
+    x: WIDTH / 2 - 50,
+    y: 40,
+    width: 100,
+    height: 100,
+    health: 100,
+    maxHealth: 100,
+    attackTimer: 0,
+    speed: 2 + gameSpeed,
+    direction: 1,
+    moveType: moveType,
+    moveFrame: 0,
+    angle: 0, // Para movimento circular
+    dx: 2 + gameSpeed, // Para movimento diagonal
+    dy: 2 + gameSpeed
+  };
+
+  obstacles = [];
+  powerUps = [];
+  playerShots = [];
+}
+
+function updateBoss() {
+  if (!boss) return;
+
+  boss.moveFrame++;
+
+  if (boss.moveType === 0) {
+    // Movimento horizontal padrão
+    boss.x += boss.speed * boss.direction;
+    if (boss.x + boss.width > WIDTH || boss.x < 0) boss.direction *= -1;
+  } else if (boss.moveType === 1) {
+    // Movimento senoidal (horizontal + onda vertical)
+    boss.x += boss.speed * boss.direction;
+    boss.y = 40 + Math.sin(boss.moveFrame / 30) * 40;
+    if (boss.x + boss.width > WIDTH || boss.x < 0) boss.direction *= -1;
+  } else if (boss.moveType === 2) {
+    // Movimento vertical (sobe e desce entre topo e meio)
+    boss.y += boss.speed * boss.direction;
+    if (boss.y < 20 || boss.y + boss.height > HEIGHT / 2) boss.direction *= -1;
+  } else if (boss.moveType === 3) {
+    // Movimento diagonal (quica nas bordas)
+    boss.x += boss.dx;
+    boss.y += boss.dy;
+    if (boss.x < 0 || boss.x + boss.width > WIDTH) boss.dx *= -1;
+    if (boss.y < 20 || boss.y + boss.height > HEIGHT / 2) boss.dy *= -1;
+  } else if (boss.moveType === 4) {
+    // Movimento circular
+    boss.angle += 0.04;
+    boss.x = WIDTH / 2 - 50 + Math.cos(boss.angle) * 100;
+    boss.y = 90 + Math.sin(boss.angle) * 60;
+  }
+
+  boss.attackTimer++;
+  if (boss.attackTimer > 90) {
+    spawnBossAttack();
+    boss.attackTimer = 0;
+  }
+
+  ctx.fillStyle = "#ff5555";
+  ctx.fillRect(boss.x, boss.y, boss.width, boss.height);
+  drawEmoji(boss.emoji, boss.x + 15, boss.y + 20, 70);
+
+  // Barra de vida
+  ctx.fillStyle = "#222";
+  ctx.fillRect(boss.x, boss.y - 20, boss.width, 12);
+  ctx.fillStyle = "#0f0";
+  ctx.fillRect(boss.x, boss.y - 20, (boss.health / boss.maxHealth) * boss.width, 12);
+}
+// ...existing code...
+
+    function updateBoss() {
+      if (!boss) return;
+
+      boss.x += boss.speed * boss.direction;
+      if (boss.x + boss.width > WIDTH || boss.x < 0) boss.direction *= -1;
+
+      boss.attackTimer++;
+      if (boss.attackTimer > 90) {
+        spawnBossAttack();
+        boss.attackTimer = 0;
+      }
+
+      ctx.fillStyle = "#ff5555";
+      ctx.fillRect(boss.x, boss.y, boss.width, boss.height);
+      drawEmoji(boss.emoji, boss.x + 15, boss.y + 20, 70);
+
+      // Barra de vida
+      ctx.fillStyle = "#222";
+      ctx.fillRect(boss.x, boss.y - 20, boss.width, 12);
+      ctx.fillStyle = "#0f0";
+      ctx.fillRect(boss.x, boss.y - 20, (boss.health / boss.maxHealth) * boss.width, 12);
+    }
+
+    function spawnBossAttack() {
+      if (!boss) return;
+      const attackType = Math.random();
+
+      if (attackType < 0.5) {
+        let size = 25;
+        obstacles.push({
+          x: boss.x + boss.width / 2 - size / 2,
+          y: boss.y + boss.height,
+          width: size,
+          height: size,
+          speed: 5 + gameSpeed,
+          emoji: "🔥",
+          fromBoss: true,
+        });
+      } else {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        for (let i = 0; i < 3; i++) {
+          obstacles.push({
+            x: side === -1 ? -30 - i * 40 : WIDTH + i * 40,
+            y: boss.y + 40 + i * 50,
+            width: 25,
+            height: 25,
+            speedX: 3 * side,
+            speedY: 1 + Math.random(),
+            emoji: "🔥",
+            fromBoss: true,
+          });
+        }
+      }
+    }
+
+    function updateObstacles() {
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        let ob = obstacles[i];
+        if (ob.speedX) {
+          ob.x += ob.speedX;
+          ob.y += ob.speedY;
+        } else {
+          ob.y += ob.speed;
+        }
+
+        drawObstacle(ob);
+
+        if (ob.y > HEIGHT || ob.x < -50 || ob.x > WIDTH + 50) {
+          obstacles.splice(i, 1);
+          continue;
+        }
+
+        if (!player.immune && collide(player, ob)) {
+          if (ob.fromBoss) {
+takeDamage();
+obstacles.splice(i, 1);
+} else {
+takeDamage();
+obstacles.splice(i, 1);
+}
+}
+}
+}
+function updatePowerUps() {
+  for (let i = powerUps.length - 1; i >= 0; i--) {
+    let pu = powerUps[i];
+    pu.y += pu.speed;
+    drawPowerUp(pu);
+
+    if (pu.y > HEIGHT) {
+      powerUps.splice(i, 1);
+      continue;
+    }
+
+    if (collide(player, pu)) {
+      gainLife();
+      powerUps.splice(i, 1);
+    }
+  }
+}
+
+function updatePlayerShots() {
+  for (let i = playerShots.length - 1; i >= 0; i--) {
+    let shot = playerShots[i];
+    shot.y -= shot.speed;
+    ctx.fillStyle = "#00ffff";
+    ctx.fillRect(shot.x, shot.y, shot.width, shot.height);
+
+    if (shot.y < 0) {
+      playerShots.splice(i, 1);
+      continue;
+    }
+
+    if (boss && collide(shot, boss)) {
+      boss.health -= 10;
+      playerShots.splice(i, 1);
+      if (boss.health <= 0) {
+        boss = null;
+        score++;
+      }
+    }
+  }
+}
+
+function takeDamage() {
+  if (player.immune) return;
+  player.lives--;
+  livesDisplay.textContent = "Vidas: " + player.lives;
+  if (player.lives <= 0) {
+    gameOver = true;
+    endGame();
+  } else {
+    player.immune = true;
+    player.immuneTimer = 120;
+  }
+}
+
+function gainLife() {
+  if (player.lives < 5) {
+    player.lives++;
+    livesDisplay.textContent = "Vidas: " + player.lives;
+  }
+}
+
+function collide(a, b) {
+  return a.x < b.x + b.width &&
+         a.x + a.width > b.x &&
+         a.y < b.y + b.height &&
+         a.y + a.height > b.y;
+}
+
+function endGame() {
+  ctx.fillStyle = "rgba(0,0,0,0.8)";
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  ctx.fillStyle = "#f00";
+  ctx.font = "bold 48px serif";
+  ctx.fillText("Fim de Jogo!", WIDTH / 2 - 130, HEIGHT / 2);
+  restartBtn.style.display = "inline-block";
+}
+
+function update() {
+  if (gameOver) return;
+
+  frameCount++;
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+  // Movimento player
+  if (moveLeft) player.x -= player.speed;
+  if (moveRight) player.x += player.speed;
+
+  // Limites player
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.width > WIDTH) player.x = WIDTH - player.width;
+
+  // Tiro
+  if (shooting && player.shootCooldown === 0) {
+    playerShots.push({
+      x: player.x + player.width / 2 - 5,
+      y: player.y,
+      width: 10,
+      height: 20,
+      speed: 10,
+    });
+    player.shootCooldown = 55;
+  }
+  if (player.shootCooldown > 0) player.shootCooldown--;
+
+  // Atualizar obstáculos
+  updateObstacles();
+
+  // Atualizar powerUps
+  updatePowerUps();
+
+  // Atualizar tiros
+  updatePlayerShots();
+
+  // Pontuação aumenta por tempo (frameCount / 60 para segundos)
+  if (!boss && frameCount % 6 === 0) { // Aproximadamente 10 pontos por segundo
+    score++;
+    scoreDisplay.textContent = "Pontuação: " + score;
+    gameSpeed = 1 + score / 500; // Aumenta velocidade gradualmente
+    updatePhase();
+  }
+
+  // Criar obstáculos e powerUps
+  if (frameCount % Math.floor(60 / gameSpeed) === 0) createObstacle();
+  if (frameCount % Math.floor(300 / gameSpeed) === 0) createPowerUp();
+
+  // Verificar bosses
+  if (!boss && BOSS_SCORES.includes(score)) {
+    startBoss(score);
+  }
+
+  if (boss) {
+    updateBoss();
+  }
+
+  drawPlayer();
+
+  if (player.immune) {
+    player.immuneTimer--;
+    if (player.immuneTimer <= 0) player.immune = false;
+  }
+
+  if (!gameOver) requestAnimationFrame(update);
+}
+
+// ...existing code...
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "a" || e.key === "A") moveLeft = true;
+  if (e.key === "d" || e.key === "D") moveRight = true;
+  if (e.key === "w" || e.key === "W") shooting = true;
+  if (e.key === "p" || e.key === "P") {
+    score += 100;
+    scoreDisplay.textContent = "Pontuação: " + score;
+    gameSpeed = 1 + score / 500;
+    updatePhase();
+  }
+});
+
+// ...existing code...
+
+window.addEventListener("keyup", (e) => {
+  if (e.key === "a" || e.key === "A") moveLeft = false;
+  if (e.key === "d" || e.key === "D") moveRight = false;
+  if (e.key === "w" || e.key === "W") shooting = false;
+});
+
+resetGame();
+</script> 
+</body>
+</html>
